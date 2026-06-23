@@ -3,6 +3,7 @@
   <head>
     <title>Mi Primera Experiencia WebXR</title>
     <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/clydedz/aframe-extras@d73d666/dist/aframe-extras.min.js"></script>
   </head>
   <body>
     <a-scene>
@@ -14,12 +15,18 @@
       <a-plane position="0 0 0" rotation="-90 0 0" width="4" height="4" color="#7BC8A4"></a-plane>
       <a-sky color="#ECECEC"></a-sky>
 
-      <a-entity tracked-controls="hand: left">
-        <a-sphere radius="0.05" color="#888888"></a-sphere>
-      </a-entity>
+      <a-entity id="rig" movement-controls="controls: checkpoint, gamepad, keyboard; speed: 0.1">
+        
+        <a-entity camera position="0 1.6 0" look-controls></a-entity>
 
-      <a-entity tracked-controls="hand: right">
-        <a-sphere radius="0.05" color="#888888"></a-sphere>
+        <a-entity tracked-controls="hand: left">
+          <a-sphere radius="0.05" color="#888888"></a-sphere>
+        </a-entity>
+
+        <a-entity tracked-controls="hand: right">
+          <a-sphere radius="0.05" color="#888888"></a-sphere>
+        </a-entity>
+
       </a-entity>
       
     </a-scene>
