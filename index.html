@@ -2,427 +2,89 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>WebXR Sandbox Interactivo (Fijado)</title>
-
-  <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
-
-  <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.3.0/dist/aframe-physics-system.min.js"></script>
-
-  <script src="https://cdn.jsdelivr.net/npm/super-hands@3.0.3/dist/super-hands.min.js"></script>
-
-  <style>
-    .a-canvas { cursor: crosshair; }
-  </style>
+  <title>El Vacío - WebXR Quest 2</title>
+  
+  <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.0.0/dist/aframe-extras.min.js"></script>
 
   <script>
-  // ============================================================
-  //  COMPONENTES PERSONALIZADOS
-  // ============================================================
-
-  // 1. MOVIMIENTO NATIVO PARA PC
-  AFRAME.registerComponent('movimiento-nativo', {
-    init: function () {
-      this.keys = {};
-      this.velocidad = 0.08;
-      this._onKeyDown = (e) => { this.keys[e.key.toLowerCase()] = true; };
-      this._onKeyUp   = (e) => { this.keys[e.key.toLowerCase()] = false; };
-      window.addEventListener('keydown', this._onKeyDown);
-      window.addEventListener('keyup',   this._onKeyUp);
-    },
-    remove: function () {
-      window.removeEventListener('keydown', this._onKeyDown);
-      window.removeEventListener('keyup',   this._onKeyUp);
-    },
-    tick: function () {
-      const el     = this.el;
-      const camara = el.querySelector('[camera]');
-      if (!camara) return;
-      const rot    = camara.getAttribute('rotation');
-      const angle  = rot.y * Math.PI / 180;
-      let moveX = 0, moveZ = 0;
-      if (this.keys['w'] || this.keys['arrowup'])    { moveX -= Math.sin(angle); moveZ -= Math.cos(angle); }
-      if (this.keys['s'] || this.keys['arrowdown'])  { moveX += Math.sin(angle); moveZ += Math.cos(angle); }
-      if (this.keys['a'] || this.keys['arrowleft'])  { moveX -= Math.cos(angle); moveZ += Math.sin(angle); }
-      if (this.keys['d'] || this.keys['arrowright']) { moveX += Math.cos(angle); moveZ -= Math.sin(angle); }
-      if (moveX !== 0 || moveZ !== 0) {
-        const pos = el.getAttribute('position');
-        const len = Math.sqrt(moveX * moveX + moveZ * moveZ);
-        pos.x += (moveX / len) * this.velocidad;
-        pos.z += (moveZ / len) * this.velocidad;
-        el.setAttribute('position', pos);
-      }
-    }
-  });
-
-  // 2. LOCOMOCIÓN VR (Thumbstick Izquierdo)
-  AFRAME.registerComponent('thumbstick-locomotion', {
-    schema: { velocidad: { default: 0.05 } },
-    init: function () {
-      this.eje = new THREE.Vector2();
-      this.el.addEventListener('axismove', this._onAxis.bind(this));
-    },
-    _onAxis: function (e) {
-      // Mapeo estándar de Meta Quest para el joystick izquierdo [eje 2 y eje 3]
-      this.eje.set(e.detail.axis[0] || 0, e.detail.axis[1] || 0);
-    },
-    tick: function () {
-      if (Math.abs(this.eje.x) < 0.15 && Math.abs(this.eje.y) < 0.15) return;
-
-      const rig    = document.getElementById('rig');
-      const camara = document.querySelector('[camera]');
-      if (!rig || !camara) return;
-
-      const rot   = camara.getAttribute('rotation');
-      const angle = rot.y * Math.PI / 180;
-      const spd   = this.data.velocidad;
-
-      // Movimiento relativo hacia donde mira la cámara del visor
-      const dx = (this.eje.x * Math.cos(angle) + this.eje.y * Math.sin(angle));
-      const dz = (this.eje.x * Math.sin(angle) - this.eje.y * Math.cos(angle));
-
-      const pos = rig.getAttribute('position');
-      pos.x += dx * spd;
-      pos.z += dz * spd;
-      rig.setAttribute('position', pos);
-    }
-  });
-
-  // 3. SISTEMA DE SPAWN DINÁMICO (FIJADO)
-  AFRAME.registerComponent('spawn-manager', {
-    init: function () {
-      this.contadorObjetos = 0;
-      window.sandboxSpawn = this.spawnObjeto.bind(this);
-    },
-
-    spawnObjeto: function (tipo) {
-      const camara  = document.querySelector('[camera]');
-      const rig     = document.getElementById('rig');
-      if (!camara || !rig) return;
-
-      // Calcular posición: 1.5 metros frente a la cámara
-      const dir = new THREE.Vector3(0, 0, -1);
-      dir.applyEuler(new THREE.Euler(
-        THREE.MathUtils.degToRad(camara.getAttribute('rotation').x),
-        THREE.MathUtils.degToRad(camara.getAttribute('rotation').y),
-        0, 'YXZ'
-      ));
-      const rigPos   = rig.getAttribute('position');
-      const spawnPos = {
-        x: rigPos.x + dir.x * 1.5,
-        y: rigPos.y + 1.4 + dir.y * 1.5, // Altura promedio de ojos
-        z: rigPos.z + dir.z * 1.5
-      };
-
-      this.contadorObjetos++;
-      const id    = 'obj-' + this.contadorObjetos;
-      const color = this._colorAleatorio();
-
-      // FIJADO: Usamos una entidad base limpia <a-entity> para evitar bugs de registro
-      const entidad = document.createElement('a-entity');
-      entidad.setAttribute('id', id);
-      entidad.setAttribute('position', spawnPos);
-      entidad.setAttribute('data-tipo', tipo);
-      
-      // Asignar Geometría y Materiales de forma explícita antes de inyectar las físicas
-      if (tipo === 'silla') {
-        entidad.setAttribute('gltf-model', '#modelo-tere');
-        entidad.setAttribute('scale', '0.5 0.5 0.5');
-      } else {
-        let geoConfig = '';
-        if (tipo === 'cubo')     geoConfig = 'primitive: box; width: 0.4; height: 0.4; depth: 0.4';
-        if (tipo === 'esfera')   geoConfig = 'primitive: sphere; radius: 0.23';
-        if (tipo === 'cilindro') geoConfig = 'primitive: cylinder; radius: 0.2; height: 0.5';
+    // Componente personalizado para el sistema de salto
+    AFRAME.registerComponent('sistema-salto', {
+      schema: {
+        fuerzaSalto: { type: 'number', default: 5 },
+        gravedad: { type: 'number', default: -9.8 }
+      },
+      init: function () {
+        this.velocidadY = 0;
+        this.enElSuelo = true;
         
-        entidad.setAttribute('geometry', geoConfig);
-        entidad.setAttribute('material', `color: ${color}; roughness: 0.5; metalness: 0.2`);
-        entidad.setAttribute('data-color', color);
-      }
-
-      // Atributos de interacción para super-hands
-      entidad.setAttribute('hoverable', '');
-      entidad.setAttribute('grabbable', 'suppressPhysics: true'); // Evita glitches mientras se sostiene
-      entidad.setAttribute('stretchable', '');
-      entidad.setAttribute('draggable', '');
-
-      // FIJADO: Retrasamos un frame la carga física para que Cannon registre las dimensiones reales del objeto
-      setTimeout(() => {
-        entidad.setAttribute('dynamic-body', 'mass: 1; linearDamping: 0.05; angularDamping: 0.05');
-      }, 50);
-
-      // Evento Click para abrir el editor
-      entidad.addEventListener('click', (e) => {
-        e.stopPropagation();
-        window.sandboxAbrirMenuEdicion(id, tipo !== 'silla');
-      });
-
-      document.querySelector('a-scene').appendChild(entidad);
-      this._flashUI('✓ ' + tipo.toUpperCase() + ' creado');
-    },
-
-    _colorAleatorio: function () {
-      const paleta = ['#E74C3C','#3498DB','#2ECC71','#F39C12','#9B59B6','#1ABC9C','#E67E22','#E91E63'];
-      return paleta[Math.floor(Math.random() * paleta.length)];
-    },
-
-    _flashUI: function (msg) {
-      const notif = document.getElementById('notificacion');
-      if (!notif) return;
-      notif.setAttribute('value', msg);
-      notif.setAttribute('visible', true);
-      clearTimeout(this._notifTimer);
-      this._notifTimer = setTimeout(() => notif.setAttribute('visible', false), 2000);
-    }
-  });
-
-  // 4. MENÚ VR FLOTANTE SUAVE
-  AFRAME.registerComponent('menu-flotante', {
-    schema: { distancia: { default: 1.4 }, suavizado: { default: 0.05 } },
-    init: function () {
-      this.camara    = null;
-      this.objetivoP = new THREE.Vector3();
-    },
-    tick: function () {
-      if (!this.camara) {
-        this.camara = document.querySelector('[camera]');
-        return;
-      }
-      const camPos  = new THREE.Vector3();
-      const camQuat = new THREE.Quaternion();
-      this.camara.object3D.getWorldPosition(camPos);
-      this.camara.object3D.getWorldQuaternion(camQuat);
-
-      const adelante = new THREE.Vector3(0, 0, -this.data.distancia);
-      const yaw = new THREE.Euler(0, new THREE.Euler().setFromQuaternion(camQuat, 'YXZ').y, 0);
-      adelante.applyEuler(yaw);
-
-      this.objetivoP.copy(camPos).add(adelante);
-      this.objetivoP.y = camPos.y - 0.15; 
-
-      const pos = this.el.getAttribute('position');
-      this.el.setAttribute('position', {
-        x: pos.x + (this.objetivoP.x - pos.x) * this.data.suavizado,
-        y: pos.y + (this.objetivoP.y - pos.y) * this.data.suavizado,
-        z: pos.z + (this.objetivoP.z - pos.z) * this.data.suavizado
-      });
-
-      this.el.object3D.lookAt(camPos);
-    }
-  });
-
-  // 5. COMPONENTE PANEL EDICIÓN (FIJADO)
-  AFRAME.registerComponent('menu-edicion', {
-    init: function () {
-      this.objetoActual = null;
-      this.esPrimitiva  = true;
-      window.sandboxAbrirMenuEdicion = this.abrir.bind(this);
-      window.sandboxCerrarMenuEdicion = this.cerrar.bind(this);
-      window.sandboxCambiarEscala    = this.cambiarEscala.bind(this);
-      window.sandboxCambiarColor     = this.cambiarColor.bind(this);
-      window.sandboxEliminar         = this.eliminar.bind(this);
-    },
-
-    abrir: function (idObjeto, esPrimitiva) {
-      this.objetoActual = document.getElementById(idObjeto);
-      this.esPrimitiva  = esPrimitiva;
-      if (!this.objetoActual) return;
-
-      const objPos = this.objetoActual.getAttribute('position');
-      this.el.setAttribute('position', { x: objPos.x, y: Math.max(objPos.y + 0.6, 1.0), z: objPos.z });
-      this.el.setAttribute('visible', true);
-
-      const btnColor = document.getElementById('btn-color-container');
-      if (btnColor) btnColor.setAttribute('visible', esPrimitiva);
-    },
-
-    cerrar: function () {
-      this.el.setAttribute('visible', false);
-      this.objetoActual = null;
-    },
-
-    cambiarEscala: function (factor) {
-      if (!this.objetoActual) return;
-      const s = this.objetoActual.getAttribute('scale') || { x: 1, y: 1, z: 1 };
-      const nS = { x: Math.max(s.x * factor, 0.15), y: Math.max(s.y * factor, 0.15), z: Math.max(s.z * factor, 0.15) };
-      this.objetoActual.setAttribute('scale', nS);
-      
-      // FIJADO: Forzar a Cannon a refrescar la escala del cuerpo rígido en tiempo real
-      if (this.objetoActual.body) {
-        this.objetoActual.removeAttribute('dynamic-body');
-        setTimeout(() => {
-          this.objetoActual.setAttribute('dynamic-body', 'mass: 1');
-        }, 30);
-      }
-    },
-
-    cambiarColor: function () {
-      if (!this.objetoActual || !this.esPrimitiva) return;
-      const paleta = ['#E74C3C','#3498DB','#2ECC71','#F39C12','#9B59B6','#1ABC9C','#FF5722','#E91E63','#FFFFFF'];
-      const idx    = Math.floor(Math.random() * paleta.length);
-      this.objetoActual.setAttribute('material', 'color', paleta[idx]);
-    },
-
-    eliminar: function () {
-      if (!this.objetoActual) return;
-      if (this.objetoActual.body) {
-        this.objetoActual.removeAttribute('dynamic-body');
-      }
-      this.objetoActual.parentNode.removeChild(this.objetoActual);
-      this.objetoActual = null;
-      this.cerrar();
-    }
-  });
-
-  // 6. BOTONES VR INTERACTIVOS
-  AFRAME.registerComponent('boton-vr', {
-    schema: {
-      accion:     { type: 'string', default: '' },
-      parametro:  { type: 'string', default: '' },
-      colorBase:  { type: 'color',  default: '#2C3E50' },
-      colorHover: { type: 'color',  default: '#3498DB' }
-    },
-    init: function () {
-      const d = this.data;
-      this.el.setAttribute('material', 'color: ' + d.colorBase + '; opacity: 0.95; shader: flat');
-
-      this.el.addEventListener('mouseenter', () => this.el.setAttribute('material', 'color', d.colorHover));
-      this.el.addEventListener('mouseleave', () => this.el.setAttribute('material', 'color', d.colorBase));
-
-      const ejecutar = (e) => {
-        if (e) e.stopPropagation();
-        switch (d.accion) {
-          case 'spawn':        if(window.sandboxSpawn) window.sandboxSpawn(d.parametro); break;
-          case 'escala-mas':   if(window.sandboxCambiarEscala) window.sandboxCambiarEscala(1.2); break;
-          case 'escala-menos': if(window.sandboxCambiarEscala) window.sandboxCambiarEscala(0.8);  break;
-          case 'color':        if(window.sandboxCambiarColor) window.sandboxCambiarColor(); break;
-          case 'eliminar':     if(window.sandboxEliminar) window.sandboxEliminar(); break;
-          case 'cerrar-edicion': if(window.sandboxCerrarMenuEdicion) window.sandboxCerrarMenuEdicion(); break;
-          case 'toggle-menu':
-            const menu = document.getElementById('menu-principal');
-            if (menu) menu.setAttribute('visible', !menu.getAttribute('visible'));
-            break;
+        // Escuchamos los botones de los mandos de Quest 2 (A en el derecho, X en el izquierdo)
+        this.el.sceneEl.addEventListener('abuttondown', () => this.saltar());
+        this.el.sceneEl.addEventListener('xbuttondown', () => this.saltar());
+        
+        // Soporte adicional para teclado (barra espaciadora) por si pruebas en PC
+        window.addEventListener('keydown', (e) => {
+          if (e.code === 'Space') this.saltar();
+        });
+      },
+      saltar: function () {
+        if (this.enElSuelo) {
+          this.velocidadY = this.data.fuerzaSalto;
+          this.enElSuelo = false;
         }
-      };
+      },
+      tick: function (time, timeDelta) {
+        if (this.enElSuelo) return;
 
-      this.el.addEventListener('click', ejecutar);
-    }
-  });
+        const dt = timeDelta / 1000; // Convertir a segundos
+        this.velocidadY += this.data.gravedad * dt;
+        
+        // Actualizamos la posición Y (altura) del jugador
+        const posicion = this.el.getAttribute('position');
+        posicion.y += this.velocidadY * dt;
 
-  // 7. LABELS TEXT
-  AFRAME.registerComponent('label-boton', {
-    schema: { texto: { type: 'string', default: '' } },
-    init: function () {
-      const txt = document.createElement('a-text');
-      txt.setAttribute('value',  this.data.texto);
-      txt.setAttribute('align',  'center');
-      txt.setAttribute('color',  '#FFFFFF');
-      txt.setAttribute('width',  '0.8');
-      txt.setAttribute('position', '0 0 0.015');
-      txt.setAttribute('wrap-count', '14');
-      this.el.appendChild(txt);
-    }
-  });
+        // Colisión simple con el suelo (suponiendo que el suelo está en y=0)
+        if (posicion.y <= 0) {
+          posicion.y = 0;
+          this.velocidadY = 0;
+          this.enElSuelo = true;
+        }
+        
+        this.el.setAttribute('position', posicion);
+      }
+    });
   </script>
 </head>
 <body>
 
-<a-scene
-  physics="driver: local; gravity: -9.8; debug: false; maxSubSteps: 4"
-  renderer="antialias: true; colorManagement: true">
+  <a-scene background="color: #050505">
 
-  <a-assets>
-    <a-asset-item id="modelo-tere" src="./assetss/dining_chair.glb"></a-asset-item>
-  </a-assets>
+    <a-sky color="#050505"></a-sky>
 
-  <a-light type="ambient" color="#FFF" intensity="0.5"></a-light>
-  <a-light type="directional" color="#FFF" intensity="0.8" position="-2 5 2"></a-light>
+    <a-plane position="0 0 0" rotation="-90 0 0" width="1000" height="1000" 
+             segments-width="250" segments-height="250" 
+             material="color: #222222; wireframe: true"></a-plane>
+    <a-plane position="0 -0.01 0" rotation="-90 0 0" width="1000" height="1000" 
+             material="color: #050505"></a-plane>
 
-  <a-plane id="suelo"
-           position="0 0 0" rotation="-90 0 0"
-           width="40" height="40"
-           color="#27ae60"
-           static-body>
-  </a-plane>
+    <a-entity id="jugador" 
+              movement-controls="speed: 0.15" 
+              position="0 0 0" 
+              sistema-salto>
+      
+      <a-entity camera 
+                position="0 1.6 0" 
+                look-controls="pointerLockEnabled: false">
+      </a-entity>
 
-  <a-sky color="#2c3e50"></a-sky>
-
-  <a-box static-body position="0 0.4 -2" width="1.5" height="0.8" depth="0.8" color="#d35400"></a-box>
-
-  <a-entity id="rig" position="0 0 1" movimiento-nativo spawn-manager>
-    
-    <a-entity id="camara-principal" camera position="0 1.6 0" look-controls>
-      <a-cursor id="cursor-desktop"
-                raycaster="objects: .boton-vr-target, [data-tipo]; far: 6"
-                color="#00FF88">
-      </a-cursor>
+      <a-entity class="controlador" 
+                oculus-touch-controls="hand: left"></a-entity>
+      
+      <a-entity class="controlador" 
+                oculus-touch-controls="hand: right"></a-entity>
     </a-entity>
 
-    <a-entity id="mano-izquierda"
-              oculus-touch-controls="hand: left"
-              thumbstick-locomotion
-              super-hands
-              raycaster="objects: .boton-vr-target, [data-tipo]; far: 5; lineColor: #9b59b6; showLine: true">
-              <a-sphere radius="0.03" color="#9b59b6"></a-sphere>
-    </a-entity>
+  </a-scene>
 
-    <a-entity id="mano-derecha"
-              oculus-touch-controls="hand: right"
-              super-hands
-              raycaster="objects: .boton-vr-target, [data-tipo]; far: 5; lineColor: #3498db; showLine: true">
-              <a-sphere radius="0.03" color="#3498db"></a-sphere>
-
-              <a-box class="boton-vr-target"
-                     position="0 0.05 0.05" scale="0.5 0.5 0.5"
-                     width="0.1" height="0.04" depth="0.05"
-                     boton-vr="accion: toggle-menu; colorBase: #e74c3c; colorHover: #c0392b"
-                     label-boton="texto: MENU">
-              </a-box>
-    </a-entity>
-  </a-entity>
-
-  <a-entity id="menu-principal" menu-flotante="distancia: 1.2" position="0 1.3 -1.2">
-    <a-plane width="0.7" height="0.9" color="#16a085" opacity="0.95" position="0 0 -0.005"></a-plane>
-    <a-text value="SANDBOX VR" align="center" color="#FFF" width="1.2" position="0 0.38 0"></a-text>
-
-    <a-box class="boton-vr-target" position="0 0.2 0" width="0.5" height="0.1" depth="0.02"
-           boton-vr="accion: spawn; parametro: cubo; colorBase: #2c3e50; colorHover: #2980b9"
-           label-boton="texto: CREAR CUBO"></a-box>
-
-    <a-box class="boton-vr-target" position="0 0.05 0" width="0.5" height="0.1" depth="0.02"
-           boton-vr="accion: spawn; parametro: esfera; colorBase: #2c3e50; colorHover: #2980b9"
-           label-boton="texto: CREAR ESFERA"></a-box>
-
-    <a-box class="boton-vr-target" position="0 -0.1 0" width="0.5" height="0.1" depth="0.02"
-           boton-vr="accion: spawn; parametro: cilindro; colorBase: #2c3e50; colorHover: #2980b9"
-           label-boton="texto: CREAR CILINDRO"></a-box>
-
-    <a-box class="boton-vr-target" position="0 -0.25 0" width="0.5" height="0.1" depth="0.02"
-           boton-vr="accion: spawn; parametro: silla; colorBase: #d35400; colorHover: #e67e22"
-           label-boton="texto: CREAR SILLA GLTF"></a-box>
-
-    <a-text id="notificacion" value="" align="center" color="#fff" width="0.8" position="0 -0.38 0" visible="false"></a-text>
-  </a-entity>
-
-  <a-entity id="menu-edicion" menu-edicion visible="false">
-    <a-plane width="0.6" height="0.6" color="#2c3e50" opacity="0.95" position="0 0 -0.01"></a-plane>
-    
-    <a-box class="boton-vr-target" position="-0.13 0.18 0" width="0.22" height="0.08" depth="0.01"
-           boton-vr="accion: escala-mas; colorBase: #27ae60" label-boton="texto: + ESCALA"></a-box>
-
-    <a-box class="boton-vr-target" position="0.13 0.18 0" width="0.22" height="0.08" depth="0.01"
-           boton-vr="accion: escala-menos; colorBase: #c0392b" label-boton="texto: - ESCALA"></a-box>
-
-    <a-entity id="btn-color-container" position="0 0.04 0">
-      <a-box class="boton-vr-target" width="0.48" height="0.08" depth="0.01"
-             boton-vr="accion: color; colorBase: #f1c40f; colorHover: #f39c12" label-boton="texto: COLOR RANDOM"></a-box>
-    </a-entity>
-
-    <a-box class="boton-vr-target" position="0 -0.1 0" width="0.48" height="0.08" depth="0.01"
-           boton-vr="accion: eliminar; colorBase: #7f8c8d; colorHover: #e74c3c" label-boton="texto: ELIMINAR OBJETO"></a-box>
-
-    <a-box class="boton-vr-target" position="0 -0.22 0" width="0.48" height="0.07" depth="0.01"
-           boton-vr="accion: cerrar-edicion; colorBase: #34495e" label-boton="texto: X CERRAR"></a-box>
-  </a-entity>
-
-</a-scene>
 </body>
 </html>
