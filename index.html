@@ -3,7 +3,66 @@
   <head>
     <title>Mi Primera Experiencia WebXR</title>
     <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/gh/clydedz/aframe-extras@v7.5.0/dist/aframe-extras.min.js"></script>
+    <script>
+      // Componente personalizado para mover el Rig con Teclado (PC) y Joystick (Meta Quest)
+      AFRAME.registerComponent('movimiento-nativo', {
+        init: function () {
+          this.keys = {};
+          this.velocidad = 0.08;
+          
+          // Escuchar teclado en PC
+          window.addEventListener('keydown', (e) => { this.keys[e.key.toLowerCase()] = true; });
+          window.addEventListener('keyup', (e) => { this.keys[e.key.toLowerCase()] = false; });
+        },
+        
+        tick: function () {
+          let el = this.el; // El Rig
+          let camara = el.querySelector('[camera]');
+          let rotacionCamara = camara.getAttribute('rotation');
+          
+          // Convertir rotación de la cámara a radianes para movernos en la dirección que miramos
+          let angle = rotacionCamara.y * Math.PI / 180;
+          let moveX = 0;
+          let moveZ = 0;
+
+          // 1. LÓGICA DE TECLADO (PC)
+          if (this.keys['w'] || this.keys['arrowup']) { moveX -= Math.sin(angle); moveZ -= Math.cos(angle); }
+          if (this.keys['s'] || this.keys['arrowdown']) { moveX += Math.sin(angle); moveZ += Math.cos(angle); }
+          if (this.keys['a'] || this.keys['arrowleft']) { moveX -= Math.cos(angle); moveZ += Math.sin(angle); }
+          if (this.keys['dist'] || this.keys['d'] || this.keys['arrowright']) { moveX += Math.cos(angle); moveZ -= Math.sin(angle); }
+
+          // 2. LÓGICA DE JOYSTICK (Meta Quest - Gamepad API)
+          let gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+          for (let i = 0; i < gamepads.length; i++) {
+            let gp = gamepads[i];
+            // Buscamos el mando izquierdo (suele tener el id u orden específico)
+            if (gp && gp.hand === 'left' && gp.axes) {
+              let joystickX = gp.axes[2] || gp.axes[0]; // Eje X del stick
+              let joystickY = gp.axes[3] || gp.axes[1]; // Eje Y del stick
+              
+              if (Math.abs(joystickX) > 0.1 || Math.abs(joystickY) > 0.1) {
+                // Adelante/Atrás
+                moveX += joystickY * Math.sin(angle);
+                moveZ += joystickY * Math.cos(angle);
+                // Izquierda/Derecha
+                moveX += joystickX * Math.cos(angle);
+                moveZ -= joystickX * Math.sin(angle);
+              }
+            }
+          }
+
+          // Aplicar el movimiento si hay alguna pulsación o acción del joystick
+          if (moveX !== 0 || moveZ !== 0) {
+            let posicionActual = el.getAttribute('position');
+            // Normalizamos el vector para que no camine más rápido en diagonal
+            let length = Math.sqrt(moveX * moveX + moveZ * moveZ);
+            posicionActual.x += (moveX / length) * this.velocidad;
+            posicionActual.z += (moveZ / length) * this.velocidad;
+            el.setAttribute('position', posicionActual);
+          }
+        }
+      });
+    </script>
   </head>
   <body>
     <a-scene>
@@ -12,18 +71,18 @@
       <a-sphere position="0 1.25 -5" radius="1.25" color="#EF2D5E"></a-sphere>
       <a-cylinder position="1 0.75 -3" radius="0.5" height="1.5" color="#FFC65D"></a-cylinder>
       
-      <a-plane position="0 0 0" rotation="-90 0 0" width="10" height="10" color="#7BC8A4"></a-plane>
+      <a-plane position="0 0 0" rotation="-90 0 0" width="20" height="20" color="#7BC8A4"></a-plane>
       <a-sky color="#ECECEC"></a-sky>
 
-      <a-entity id="rig" movement-controls="controls: gamepad, keyboard; speed: 0.15; fly: false">
+      <a-entity id="rig" position="0 0 0" movimiento-nativo>
         
-        <a-entity camera position="0 1.6 0" look-controls="pointerLockEnabled: true"></a-entity>
+        <a-entity camera position="0 1.6 0" look-controls></a-entity>
 
-        <a-entity oculus-touch-controls="hand: left" laser-controls="hand: left">
+        <a-entity oculus-touch-controls="hand: left">
           <a-sphere radius="0.05" color="#888888"></a-sphere>
         </a-entity>
 
-        <a-entity oculus-touch-controls="hand: right" laser-controls="hand: right">
+        <a-entity oculus-touch-controls="hand: right">
           <a-sphere radius="0.05" color="#888888"></a-sphere>
         </a-entity>
 
