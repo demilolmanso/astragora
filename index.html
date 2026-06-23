@@ -1,61 +1,744 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <title>Mi Primera Experiencia WebXR</title>
-    <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
-    <script>
-      // Componente de movimiento para PC que ya te andaba
-      AFRAME.registerComponent('movimiento-nativo', {
-        init: function () {
-          this.keys = {};
-          this.velocidad = 0.08;
-          window.addEventListener('keydown', (e) => { this.keys[e.key.toLowerCase()] = true; });
-          window.addEventListener('keyup', (e) => { this.keys[e.key.toLowerCase()] = false; });
-        },
-        tick: function () {
-          let el = this.el;
-          let camara = el.querySelector('[camera]');
-          let rotacionCamara = camara.getAttribute('rotation');
-          let angle = rotacionCamara.y * Math.PI / 180;
-          let moveX = 0;
-          let moveZ = 0;
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>WebXR Sandbox Interactivo</title>
 
-          if (this.keys['w'] || this.keys['arrowup']) { moveX -= Math.sin(angle); moveZ -= Math.cos(angle); }
-          if (this.keys['s'] || this.keys['arrowdown']) { moveX += Math.sin(angle); moveZ += Math.cos(angle); }
-          if (this.keys['a'] || this.keys['arrowleft']) { moveX -= Math.cos(angle); moveZ += Math.sin(angle); }
-          if (this.keys['d'] || this.keys['arrowright']) { moveX += Math.cos(angle); moveZ -= Math.sin(angle); }
+  <!-- ===== LIBRERÍAS PRINCIPALES ===== -->
+  <!-- A-Frame v1.6.0 -->
+  <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
 
-          if (moveX !== 0 || moveZ !== 0) {
-            let posicionActual = el.getAttribute('position');
-            let length = Math.sqrt(moveX * moveX + moveZ * moveZ);
-            posicionActual.x += (moveX / length) * this.velocidad;
-            posicionActual.z += (moveZ / length) * this.velocidad;
-            el.setAttribute('position', posicionActual);
-          }
-        }
+  <!--
+    SISTEMA DE FÍSICAS: aframe-physics-system v4 (Cannon.js)
+    Elegimos Cannon.js porque:
+    - Es el más estable con A-Frame 1.6.0
+    - Bien documentado para VR
+    - Soporta static-body y dynamic-body de forma sencilla
+    - Ammo.js/PhysX requiere WASM y tiene problemas de CORS en WebXR local
+  -->
+  <script src="https://cdn.jsdelivr.net/gh/nicktarnold/aframe-physics-system@4.0.1/dist/aframe-physics-system.min.js"></script>
+
+  <!--
+    SUPER-HANDS: sistema de interacción con las manos / controladores
+    Permite agarrar, mover y soltar objetos con física integrada
+  -->
+  <script src="https://cdn.jsdelivr.net/npm/super-hands@3.0.3/dist/super-hands.min.js"></script>
+
+  <!-- Gestures para super-hands (stretchable, drag-droppable, etc.) -->
+  <script src="https://cdn.jsdelivr.net/npm/super-hands@3.0.3/dist/super-hands-physics.min.js"></script>
+
+  <style>
+    /* Cursor personalizado para modo desktop */
+    .a-canvas { cursor: crosshair; }
+  </style>
+
+  <script>
+  // ============================================================
+  //  COMPONENTES PERSONALIZADOS
+  //  Registrados ANTES de que A-Frame inicialice la escena
+  // ============================================================
+
+  // -----------------------------------------------------------
+  // 1. MOVIMIENTO NATIVO PARA PC (W/A/S/D + flechas)
+  //    Conservado del código original, sin cambios
+  // -----------------------------------------------------------
+  AFRAME.registerComponent('movimiento-nativo', {
+    init: function () {
+      this.keys = {};
+      this.velocidad = 0.08;
+      this._onKeyDown = (e) => { this.keys[e.key.toLowerCase()] = true; };
+      this._onKeyUp   = (e) => { this.keys[e.key.toLowerCase()] = false; };
+      window.addEventListener('keydown', this._onKeyDown);
+      window.addEventListener('keyup',   this._onKeyUp);
+    },
+    remove: function () {
+      // Limpieza de listeners al destruir el componente
+      window.removeEventListener('keydown', this._onKeyDown);
+      window.removeEventListener('keyup',   this._onKeyUp);
+    },
+    tick: function () {
+      const el     = this.el;
+      const camara = el.querySelector('[camera]');
+      if (!camara) return;
+      const rot    = camara.getAttribute('rotation');
+      const angle  = rot.y * Math.PI / 180;
+      let moveX = 0, moveZ = 0;
+      if (this.keys['w'] || this.keys['arrowup'])    { moveX -= Math.sin(angle); moveZ -= Math.cos(angle); }
+      if (this.keys['s'] || this.keys['arrowdown'])  { moveX += Math.sin(angle); moveZ += Math.cos(angle); }
+      if (this.keys['a'] || this.keys['arrowleft'])  { moveX -= Math.cos(angle); moveZ += Math.sin(angle); }
+      if (this.keys['d'] || this.keys['arrowright']) { moveX += Math.cos(angle); moveZ -= Math.sin(angle); }
+      if (moveX !== 0 || moveZ !== 0) {
+        const pos = el.getAttribute('position');
+        const len = Math.sqrt(moveX * moveX + moveZ * moveZ);
+        pos.x += (moveX / len) * this.velocidad;
+        pos.z += (moveZ / len) * this.velocidad;
+        el.setAttribute('position', pos);
+      }
+    }
+  });
+
+  // -----------------------------------------------------------
+  // 2. LOCOMOCIÓN VR CON THUMBSTICK IZQUIERDO (Quest 2)
+  //    Mapea el eje del joystick izquierdo al desplazamiento
+  //    del rig, siguiendo la dirección de la cámara
+  // -----------------------------------------------------------
+  AFRAME.registerComponent('thumbstick-locomotion', {
+    schema: { velocidad: { default: 0.05 } },
+    init: function () {
+      this.eje = new THREE.Vector2();
+      // Escuchamos el evento del thumbstick del mando izquierdo
+      this.el.addEventListener('axismove', this._onAxis.bind(this));
+    },
+    _onAxis: function (e) {
+      // e.detail.axis = [x, y] del thumbstick
+      this.eje.set(e.detail.axis[2] || 0, e.detail.axis[3] || 0);
+    },
+    tick: function () {
+      if (Math.abs(this.eje.x) < 0.15 && Math.abs(this.eje.y) < 0.15) return; // zona muerta
+
+      const rig    = document.getElementById('rig');
+      const camara = document.querySelector('[camera]');
+      if (!rig || !camara) return;
+
+      const rot   = camara.getAttribute('rotation');
+      const angle = rot.y * Math.PI / 180;
+      const spd   = this.data.velocidad;
+
+      const dx = -(this.eje.x * Math.cos(angle) + this.eje.y * Math.sin(angle));
+      const dz =  (this.eje.x * Math.sin(angle) - this.eje.y * Math.cos(angle));
+
+      const pos = rig.getAttribute('position');
+      pos.x += dx * spd;
+      pos.z += dz * spd;
+      rig.setAttribute('position', pos);
+    }
+  });
+
+  // -----------------------------------------------------------
+  // 3. SISTEMA DE SPAWN DINÁMICO
+  //    Crea entidades A-Frame en tiempo de ejecución con
+  //    física dinámica (dynamic-body de Cannon.js)
+  // -----------------------------------------------------------
+  AFRAME.registerComponent('spawn-manager', {
+    init: function () {
+      this.contadorObjetos = 0; // ID único para cada objeto spawneado
+      // Exposición global para que el menú pueda llamarlo
+      window.sandboxSpawn = this.spawnObjeto.bind(this);
+    },
+
+    /**
+     * Crea un objeto en la escena frente al usuario.
+     * @param {string} tipo - 'cubo' | 'esfera' | 'cilindro' | 'silla'
+     */
+    spawnObjeto: function (tipo) {
+      const camara  = document.querySelector('[camera]');
+      const rig     = document.getElementById('rig');
+      if (!camara || !rig) return;
+
+      // Calculamos posición: 2m al frente de la cámara
+      const dir      = new THREE.Vector3(0, 0, -1);
+      dir.applyEuler(new THREE.Euler(
+        THREE.MathUtils.degToRad(camara.getAttribute('rotation').x),
+        THREE.MathUtils.degToRad(camara.getAttribute('rotation').y),
+        0, 'YXZ'
+      ));
+      const rigPos   = rig.getAttribute('position');
+      const camYOff  = 1.6; // altura de la cámara en el rig
+      const spawnPos = {
+        x: rigPos.x + dir.x * 2,
+        y: rigPos.y + camYOff + dir.y * 2 + 0.3,
+        z: rigPos.z + dir.z * 2
+      };
+
+      this.contadorObjetos++;
+      const id    = 'obj-' + this.contadorObjetos;
+      const color = this._colorAleatorio();
+
+      // ---- Creación dinámica de la entidad ----
+      let entidad;
+
+      if (tipo === 'silla') {
+        // Modelo GLTF — no admite color, pero sí escala y física
+        entidad = document.createElement('a-gltf-model');
+        entidad.setAttribute('src', '#modelo-tere');
+        entidad.setAttribute('scale', '0.5 0.5 0.5');
+        entidad.setAttribute('rotation', '0 180 0');
+        // dynamic-body: masa 1kg, responde a gravedad
+        entidad.setAttribute('dynamic-body', 'mass: 1; linearDamping: 0.1; angularDamping: 0.1');
+        entidad.setAttribute('shadow', 'cast: true; receive: false');
+      } else {
+        // Primitivas geométricas
+        entidad = document.createElement('a-' + tipo);
+
+        // Tamaños por defecto según tipo
+        if (tipo === 'cubo')     entidad.setAttribute('geometry', 'primitive: box; width: 0.4; height: 0.4; depth: 0.4');
+        if (tipo === 'esfera')   entidad.setAttribute('geometry', 'primitive: sphere; radius: 0.25');
+        if (tipo === 'cilindro') entidad.setAttribute('geometry', 'primitive: cylinder; radius: 0.2; height: 0.5');
+
+        entidad.setAttribute('material', 'color: ' + color + '; roughness: 0.6; metalness: 0.1');
+        entidad.setAttribute('dynamic-body', 'mass: 1; linearDamping: 0.1; angularDamping: 0.1');
+        entidad.setAttribute('shadow', 'cast: true; receive: false');
+      }
+
+      // Atributos comunes a todos los objetos spawneados
+      entidad.setAttribute('id', id);
+      entidad.setAttribute('position', spawnPos);
+      entidad.setAttribute('data-tipo', tipo);
+      entidad.setAttribute('data-color', color);
+
+      // Hacerlo interactivo con super-hands (agarre + movimiento)
+      entidad.setAttribute('hoverable', '');
+      entidad.setAttribute('grabbable', '');
+      entidad.setAttribute('stretchable', '');
+      entidad.setAttribute('draggable-body', '');  // arrastra con física
+      entidad.setAttribute('constraint__hand', 'target: #mano-izquierda; spring: false');
+
+      // Listener: click del cursor desktop / trigger del controlador
+      // para abrir el mini-menú de edición
+      entidad.addEventListener('click', (e) => {
+        e.stopPropagation();
+        window.sandboxAbrirMenuEdicion(id, tipo !== 'silla');
       });
-    </script>
-  </head>
-  <body>
-    <a-scene>
-      
-      <a-assets>
-        <a-asset-item id="modelo-tere" src="./assetss/dining_chair.glb"></a-asset-item>
-      </a-assets>
 
-      <a-gltf-model id="personaje" src="#modelo-tere" position="0 0.56522 -3" rotation="0 180 0" scale="" gltf-model="./assetss/dining_chair.glb">
-      </a-gltf-model>
-      
-      <a-plane position="0 0 0" rotation="-90 0 0" width="20" height="20" color="#7BC8A4"></a-plane>
-      <a-sky color="#ECECEC"></a-sky>
+      // Insertamos en la escena
+      document.querySelector('a-scene').appendChild(entidad);
 
-      <a-entity id="rig" position="0 0 0" movimiento-nativo>
-        <a-entity camera position="0 1.6 0" look-controls></a-entity>
-        
-        <a-entity oculus-touch-controls="hand: left"><a-sphere radius="0.05" color="#888888"></a-sphere></a-entity>
-        <a-entity oculus-touch-controls="hand: right"><a-sphere radius="0.05" color="#888888"></a-sphere></a-entity>
-      </a-entity>
-      
-    </a-scene>
-  </body>
+      // Confirmación sonora / visual sutil
+      this._flashUI('✓ ' + tipo.charAt(0).toUpperCase() + tipo.slice(1) + ' spawneado');
+    },
+
+    _colorAleatorio: function () {
+      const paleta = ['#E74C3C','#3498DB','#2ECC71','#F39C12','#9B59B6','#1ABC9C','#E67E22','#E91E63'];
+      return paleta[Math.floor(Math.random() * paleta.length)];
+    },
+
+    _flashUI: function (msg) {
+      const notif = document.getElementById('notificacion');
+      if (!notif) return;
+      notif.setAttribute('value', msg);
+      notif.setAttribute('visible', true);
+      clearTimeout(this._notifTimer);
+      this._notifTimer = setTimeout(() => notif.setAttribute('visible', false), 2000);
+    }
+  });
+
+  // -----------------------------------------------------------
+  // 4. MENÚ VR — FLOTANTE Y ORIENTADO AL USUARIO
+  //    El panel orbita suavemente con la cabeza del usuario
+  //    sin pegarse completamente (para evitar mareo)
+  // -----------------------------------------------------------
+  AFRAME.registerComponent('menu-flotante', {
+    schema: {
+      distancia: { default: 1.4 },
+      suavizado:  { default: 0.05 }   // 0 = rígido, 1 = instantáneo
+    },
+    init: function () {
+      this.camara    = null;
+      this.objetivoQ = new THREE.Quaternion();
+      this.objetivoP = new THREE.Vector3();
+    },
+    tick: function () {
+      if (!this.camara) {
+        this.camara = document.querySelector('[camera]');
+        return;
+      }
+      // Posición de la cámara en coordenadas mundo
+      const camPos  = new THREE.Vector3();
+      const camQuat = new THREE.Quaternion();
+      this.camara.object3D.getWorldPosition(camPos);
+      this.camara.object3D.getWorldQuaternion(camQuat);
+
+      // Punto frente a la cámara (sin inclinación vertical del pitch)
+      const adelante = new THREE.Vector3(0, 0, -this.data.distancia);
+      // Solo yaw (rotación Y) para no inclinar el menú con la cabeza
+      const yaw = new THREE.Euler(0, new THREE.Euler().setFromQuaternion(camQuat, 'YXZ').y, 0);
+      adelante.applyEuler(yaw);
+
+      this.objetivoP.copy(camPos).add(adelante);
+      this.objetivoP.y = camPos.y - 0.1; // ligeramente debajo de los ojos
+
+      // Interpolación suave para evitar movimiento brusco
+      const pos = this.el.getAttribute('position');
+      this.el.setAttribute('position', {
+        x: pos.x + (this.objetivoP.x - pos.x) * this.data.suavizado,
+        y: pos.y + (this.objetivoP.y - pos.y) * this.data.suavizado,
+        z: pos.z + (this.objetivoP.z - pos.z) * this.data.suavizado
+      });
+
+      // El menú siempre mira al usuario
+      this.el.object3D.lookAt(camPos);
+    }
+  });
+
+  // -----------------------------------------------------------
+  // 5. MENÚ DE EDICIÓN DE OBJETOS
+  //    Mini-menú que aparece al seleccionar un objeto spawneado
+  //    Permite: cambiar escala, cambiar color, eliminar
+  // -----------------------------------------------------------
+  AFRAME.registerComponent('menu-edicion', {
+    init: function () {
+      this.objetoActual = null;
+      this.esPrimitiva  = true;
+      // Exponemos las funciones globalmente para llamarlas desde HTML
+      window.sandboxAbrirMenuEdicion = this.abrir.bind(this);
+      window.sandboxCerrarMenuEdicion = this.cerrar.bind(this);
+      window.sandboxCambiarEscala    = this.cambiarEscala.bind(this);
+      window.sandboxCambiarColor     = this.cambiarColor.bind(this);
+      window.sandboxEliminar         = this.eliminar.bind(this);
+    },
+
+    abrir: function (idObjeto, esPrimitiva) {
+      this.objetoActual = document.getElementById(idObjeto);
+      this.esPrimitiva  = esPrimitiva;
+      if (!this.objetoActual) return;
+
+      // Posicionamos el menú de edición encima del objeto seleccionado
+      const objPos = this.objetoActual.getAttribute('position');
+      this.el.setAttribute('position', { x: objPos.x, y: objPos.y + 0.8, z: objPos.z });
+      this.el.setAttribute('visible', true);
+
+      // Actualizamos el indicador de color solo si es primitiva
+      const btnColor = document.getElementById('btn-color-container');
+      if (btnColor) btnColor.setAttribute('visible', esPrimitiva ? 'true' : 'false');
+
+      // Highlight del objeto seleccionado
+      if (esPrimitiva && this.objetoActual.getAttribute('material')) {
+        this._colorOriginal = this.objetoActual.getAttribute('material').color;
+      }
+    },
+
+    cerrar: function () {
+      this.el.setAttribute('visible', false);
+      this.objetoActual = null;
+    },
+
+    cambiarEscala: function (factor) {
+      if (!this.objetoActual) return;
+      const s = this.objetoActual.getAttribute('scale') || { x: 1, y: 1, z: 1 };
+      const nx = Math.min(Math.max((s.x || 1) * factor, 0.1), 5);
+      const ny = Math.min(Math.max((s.y || 1) * factor, 0.1), 5);
+      const nz = Math.min(Math.max((s.z || 1) * factor, 0.1), 5);
+      this.objetoActual.setAttribute('scale', { x: nx, y: ny, z: nz });
+      // Refresca el cuerpo físico para que Cannon recalcule
+      if (this.objetoActual.body) this.objetoActual.body.needUpdate = true;
+    },
+
+    cambiarColor: function () {
+      if (!this.objetoActual || !this.esPrimitiva) return;
+      const paleta = ['#E74C3C','#3498DB','#2ECC71','#F39C12','#9B59B6','#1ABC9C','#FF5722','#E91E63','#FFFFFF','#000000'];
+      const idx    = Math.floor(Math.random() * paleta.length);
+      this.objetoActual.setAttribute('material', 'color', paleta[idx]);
+    },
+
+    eliminar: function () {
+      if (!this.objetoActual) return;
+      // Removemos el cuerpo físico antes de quitar la entidad
+      if (this.objetoActual.components['dynamic-body']) {
+        this.objetoActual.removeAttribute('dynamic-body');
+      }
+      this.objetoActual.parentNode.removeChild(this.objetoActual);
+      this.objetoActual = null;
+      this.el.setAttribute('visible', false);
+    }
+  });
+
+  // -----------------------------------------------------------
+  // 6. BOTÓN VR INTERACTIVO
+  //    Componente reutilizable para todos los botones del menú
+  //    Detecta hover (gazeInput / laser) y click / triggerdown
+  // -----------------------------------------------------------
+  AFRAME.registerComponent('boton-vr', {
+    schema: {
+      accion:     { type: 'string', default: '' },
+      parametro:  { type: 'string', default: '' },
+      colorBase:  { type: 'color',  default: '#2C3E50' },
+      colorHover: { type: 'color',  default: '#3498DB' }
+    },
+    init: function () {
+      const d = this.data;
+      this.el.setAttribute('material', 'color: ' + d.colorBase + '; opacity: 0.92; shader: flat');
+
+      // Hover: cambia color para feedback visual
+      this.el.addEventListener('mouseenter', () => {
+        this.el.setAttribute('material', 'color', d.colorHover);
+      });
+      this.el.addEventListener('mouseleave', () => {
+        this.el.setAttribute('material', 'color', d.colorBase);
+      });
+
+      // Click desktop / trigger VR
+      this.el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._ejecutar();
+      });
+      this.el.addEventListener('triggerdown', () => this._ejecutar());
+    },
+
+    _ejecutar: function () {
+      const { accion, parametro } = this.data;
+      // Despacha la acción al sistema global del sandbox
+      switch (accion) {
+        case 'spawn':        window.sandboxSpawn && window.sandboxSpawn(parametro); break;
+        case 'escala-mas':   window.sandboxCambiarEscala && window.sandboxCambiarEscala(1.25); break;
+        case 'escala-menos': window.sandboxCambiarEscala && window.sandboxCambiarEscala(0.8);  break;
+        case 'color':        window.sandboxCambiarColor && window.sandboxCambiarColor();        break;
+        case 'eliminar':     window.sandboxEliminar && window.sandboxEliminar();               break;
+        case 'cerrar-edicion': window.sandboxCerrarMenuEdicion && window.sandboxCerrarMenuEdicion(); break;
+        case 'toggle-menu':
+          const menu = document.getElementById('menu-principal');
+          if (menu) menu.setAttribute('visible', !menu.getAttribute('visible'));
+          break;
+      }
+    }
+  });
+
+  // -----------------------------------------------------------
+  // 7. HELPER: Texto centrado en un panel (crea label encima)
+  // -----------------------------------------------------------
+  AFRAME.registerComponent('label-boton', {
+    schema: { texto: { type: 'string', default: 'Botón' } },
+    init: function () {
+      const txt = document.createElement('a-text');
+      txt.setAttribute('value',  this.data.texto);
+      txt.setAttribute('align',  'center');
+      txt.setAttribute('color',  '#FFFFFF');
+      txt.setAttribute('width',  '0.8');
+      txt.setAttribute('position', '0 0 0.01');
+      txt.setAttribute('wrap-count', '12');
+      this.el.appendChild(txt);
+    }
+  });
+
+  </script>
+</head>
+<body>
+
+<!-- ============================================================
+     ESCENA PRINCIPAL
+     physics="driver: local; gravity: -9.8; debug: false"
+     - driver: local  → Cannon.js en hilo principal
+     - debug: false   → sin wireframes (mejor FPS en Quest 2)
+     ============================================================ -->
+<a-scene
+  physics="driver: local; gravity: -9.8; debug: false; maxSubSteps: 3; fixedTimeStep: 0.016667"
+  shadow="type: pcfsoft"
+  renderer="antialias: false; colorManagement: true; physicallyCorrectLights: false"
+  vr-mode-ui="enabled: true"
+  loading-screen="dotsColor: white; backgroundColor: #1a1a2e">
+
+  <!-- ===== ASSETS ===== -->
+  <a-assets timeout="10000">
+    <a-asset-item id="modelo-tere" src="./assetss/dining_chair.glb"></a-asset-item>
+  </a-assets>
+
+
+  <!-- ===== ILUMINACIÓN ===== -->
+  <!-- Luz ambiental suave para base general -->
+  <a-light type="ambient" color="#B0C4DE" intensity="0.6"></a-light>
+  <!-- Luz direccional principal (simula sol) con sombras -->
+  <a-light type="directional" color="#FFF5E0" intensity="0.9"
+           position="-3 8 -3"
+           shadow="cast: true; mapSize: 1024">
+  </a-light>
+
+
+  <!-- ===== ENTORNO ===== -->
+
+  <!-- SUELO: static-body para que los objetos no lo atraviesen -->
+  <a-plane id="suelo"
+           position="0 0 0" rotation="-90 0 0"
+           width="30" height="30"
+           color="#4A7B5B"
+           static-body
+           shadow="receive: true">
+  </a-plane>
+
+  <!-- Cuadrícula decorativa sobre el suelo -->
+  <a-entity position="0 0.01 0" rotation="-90 0 0">
+    <a-plane width="30" height="30" material="color: #5A9B6B; wireframe: true; opacity: 0.3"></a-plane>
+  </a-entity>
+
+  <!-- Cielo con degradado -->
+  <a-sky color="#1a1a2e"></a-sky>
+
+  <!-- Paredes invisibles estáticas para que los objetos no rueden al vacío -->
+  <a-box static-body visible="false" position=" 15 2 0" width="0.2" height="4" depth="30"></a-box>
+  <a-box static-body visible="false" position="-15 2 0" width="0.2" height="4" depth="30"></a-box>
+  <a-box static-body visible="false" position="0 2  15" width="30" height="4" depth="0.2"></a-box>
+  <a-box static-body visible="false" position="0 2 -15" width="30" height="4" depth="0.2"></a-box>
+
+  <!-- Mesa de referencia en la escena -->
+  <a-box static-body
+         position="2 0.4 -3"
+         width="1.2" height="0.8" depth="0.6"
+         color="#8B6914"
+         shadow="cast: true; receive: true">
+  </a-box>
+
+
+  <!-- ===== RIG DE CÁMARA Y CONTROLADORES ===== -->
+  <!--
+    El rig (padre) maneja la posición y locomoción.
+    spawn-manager aquí lo hace disponible globalmente.
+  -->
+  <a-entity id="rig"
+            position="0 0 3"
+            movimiento-nativo
+            spawn-manager>
+
+    <!-- Cámara con cursor para desktop y laser pointing en VR -->
+    <a-entity id="camara-principal"
+              camera
+              position="0 1.6 0"
+              look-controls="pointerLockEnabled: false">
+
+      <!-- Cursor desktop (reticle) — se oculta en VR automáticamente -->
+      <a-cursor id="cursor-desktop"
+                raycaster="objects: [data-tipo], .boton-vr-target; far: 8"
+                color="#00FF88"
+                fuse="false"
+                material="color: #00FF88; shader: flat"
+                geometry="primitive: ring; radiusInner: 0.01; radiusOuter: 0.015">
+      </a-cursor>
+    </a-entity>
+
+    <!-- ===== MANO IZQUIERDA ===== -->
+    <!--
+      thumbstick-locomotion: joystick izquierdo para moverse
+      super-hands: interacción con objetos (agarrar/soltar)
+    -->
+    <a-entity id="mano-izquierda"
+              oculus-touch-controls="hand: left"
+              thumbstick-locomotion
+              super-hands="colliderEvent: hitstart; colliderEventProperty: el; colliderEndEvent: hitend; colliderEndEventProperty: el"
+              sphere-collider="objects: [dynamic-body]; radius: 0.1; watch: false"
+              static-body="shape: sphere; sphereRadius: 0.08"
+              laser-controls="hand: left; model: false"
+              raycaster="objects: .boton-vr-target, [data-tipo]; far: 6; lineColor: #9B59B6; lineOpacity: 0.6">
+
+      <!-- Representación visual de la mano izquierda -->
+      <a-sphere radius="0.04" color="#9B59B6" shader="flat"></a-sphere>
+    </a-entity>
+
+    <!-- ===== MANO DERECHA ===== -->
+    <!--
+      Mano principal de interacción: agarra objetos y apunta al menú
+    -->
+    <a-entity id="mano-derecha"
+              oculus-touch-controls="hand: right"
+              super-hands="colliderEvent: hitstart; colliderEventProperty: el; colliderEndEvent: hitend; colliderEndEventProperty: el"
+              sphere-collider="objects: [dynamic-body]; radius: 0.1; watch: false"
+              static-body="shape: sphere; sphereRadius: 0.08"
+              laser-controls="hand: right; model: false"
+              raycaster="objects: .boton-vr-target, [data-tipo]; far: 8; lineColor: #3498DB; lineOpacity: 0.8">
+
+      <!-- Rayo visual del mando derecho -->
+      <a-entity line="start: 0 0 0; end: 0 0 -6; color: #3498DB; opacity: 0.5"></a-entity>
+      <!-- Representación visual de la mano derecha -->
+      <a-sphere radius="0.04" color="#3498DB" shader="flat"></a-sphere>
+
+      <!-- Botón flotante en el mando derecho para abrir/cerrar menú -->
+      <a-box class="boton-vr-target"
+             position="0 0.06 -0.04"
+             width="0.06" height="0.02" depth="0.03"
+             boton-vr="accion: toggle-menu; colorBase: #E74C3C; colorHover: #FF6B6B"
+             label-boton="texto: MENÚ">
+      </a-box>
+    </a-entity>
+
+  </a-entity>
+  <!-- fin rig -->
+
+
+  <!-- ============================================================
+       MENÚ PRINCIPAL DE SPAWN
+       Flota frente al usuario con el componente menu-flotante.
+       Incluye botones para cada tipo de objeto spawnable.
+       ============================================================ -->
+  <a-entity id="menu-principal"
+            menu-flotante="distancia: 1.4; suavizado: 0.05"
+            visible="true"
+            position="0 1.4 -1.5">
+
+    <!-- Panel de fondo del menú -->
+    <a-rounded
+      width="0.85" height="1.05" radius="0.04"
+      color="#1a1a2e" opacity="0.88" shader="flat"
+      position="0 0 -0.005">
+    </a-rounded>
+
+    <!-- Título del menú -->
+    <a-text value="SANDBOX VR"
+            align="center"
+            color="#3498DB"
+            width="1.2"
+            position="0 0.42 0"
+            font="exo2bold">
+    </a-text>
+    <a-text value="Elige un objeto para spawnear"
+            align="center"
+            color="#BDC3C7"
+            width="0.9"
+            position="0 0.33 0">
+    </a-text>
+
+    <!-- Separador decorativo -->
+    <a-box color="#3498DB" shader="flat"
+           width="0.7" height="0.004" depth="0.001"
+           position="0 0.27 0">
+    </a-box>
+
+    <!-- ----- BOTONES DE SPAWN ----- -->
+
+    <!-- Botón: Cubo -->
+    <a-box class="boton-vr-target"
+           position="0 0.16 0"
+           width="0.65" height="0.14" depth="0.02"
+           boton-vr="accion: spawn; parametro: cubo; colorBase: #E74C3C; colorHover: #C0392B"
+           label-boton="texto: 🟥 CUBO">
+    </a-box>
+
+    <!-- Botón: Esfera -->
+    <a-box class="boton-vr-target"
+           position="0 0 0"
+           width="0.65" height="0.14" depth="0.02"
+           boton-vr="accion: spawn; parametro: esfera; colorBase: #3498DB; colorHover: #2980B9"
+           label-boton="texto: 🔵 ESFERA">
+    </a-box>
+
+    <!-- Botón: Cilindro -->
+    <a-box class="boton-vr-target"
+           position="0 -0.16 0"
+           width="0.65" height="0.14" depth="0.02"
+           boton-vr="accion: spawn; parametro: cilindro; colorBase: #2ECC71; colorHover: #27AE60"
+           label-boton="texto: 🟢 CILINDRO">
+    </a-box>
+
+    <!-- Botón: Silla (modelo GLTF) -->
+    <a-box class="boton-vr-target"
+           position="0 -0.32 0"
+           width="0.65" height="0.14" depth="0.02"
+           boton-vr="accion: spawn; parametro: silla; colorBase: #F39C12; colorHover: #D68910"
+           label-boton="texto: 🪑 SILLA GLTF">
+    </a-box>
+
+    <!-- Pie del menú: instrucción -->
+    <a-text value="Apuntá con el mando derecho\ny presioná el gatillo"
+            align="center"
+            color="#7F8C8D"
+            width="0.7"
+            position="0 -0.46 0">
+    </a-text>
+
+    <!-- Notificación flotante de feedback -->
+    <a-text id="notificacion"
+            value=""
+            align="center"
+            color="#2ECC71"
+            width="0.8"
+            position="0 0.57 0"
+            visible="false">
+    </a-text>
+  </a-entity>
+
+
+  <!-- ============================================================
+       MINI-MENÚ DE EDICIÓN
+       Aparece al seleccionar un objeto spawneado.
+       Se posiciona sobre el objeto seleccionado.
+       ============================================================ -->
+  <a-entity id="menu-edicion"
+            menu-edicion
+            visible="false">
+
+    <!-- Fondo panel edición -->
+    <a-rounded
+      width="0.72" height="0.72" radius="0.03"
+      color="#0D1117" opacity="0.93" shader="flat"
+      position="0 0 -0.005">
+    </a-rounded>
+
+    <!-- Título -->
+    <a-text value="EDITAR OBJETO"
+            align="center" color="#E74C3C" width="1"
+            position="0 0.28 0">
+    </a-text>
+
+    <a-box color="#E74C3C" shader="flat"
+           width="0.6" height="0.003" depth="0.001"
+           position="0 0.22 0">
+    </a-box>
+
+    <!-- Fila 1: Escala -->
+    <!-- Agrandar -->
+    <a-box class="boton-vr-target"
+           position="-0.19 0.1 0"
+           width="0.22" height="0.1" depth="0.02"
+           boton-vr="accion: escala-mas; colorBase: #1ABC9C; colorHover: #17A589"
+           label-boton="texto: ＋ Grande">
+    </a-box>
+
+    <!-- Achicar -->
+    <a-box class="boton-vr-target"
+           position="0.19 0.1 0"
+           width="0.22" height="0.1" depth="0.02"
+           boton-vr="accion: escala-menos; colorBase: #8E44AD; colorHover: #7D3C98"
+           label-boton="texto: － Chico">
+    </a-box>
+
+    <!-- Fila 2: Color (solo visible para primitivas) -->
+    <a-entity id="btn-color-container" visible="true">
+      <a-box class="boton-vr-target"
+             position="0 -0.04 0"
+             width="0.46" height="0.1" depth="0.02"
+             boton-vr="accion: color; colorBase: #E67E22; colorHover: #CA6F1E"
+             label-boton="texto: 🎨 Color random">
+      </a-box>
+    </a-entity>
+
+    <!-- Fila 3: Eliminar -->
+    <a-box class="boton-vr-target"
+           position="0 -0.18 0"
+           width="0.46" height="0.1" depth="0.02"
+           boton-vr="accion: eliminar; colorBase: #922B21; colorHover: #E74C3C"
+           label-boton="texto: 🗑️ Eliminar">
+    </a-box>
+
+    <!-- Botón cerrar -->
+    <a-box class="boton-vr-target"
+           position="0 -0.30 0"
+           width="0.46" height="0.09" depth="0.02"
+           boton-vr="accion: cerrar-edicion; colorBase: #2C3E50; colorHover: #566573"
+           label-boton="texto: ✕ Cerrar">
+    </a-box>
+  </a-entity>
+  <!-- fin menu-edicion -->
+
+
+  <!-- ===== OBJETO DE EJEMPLO PRE-CARGADO (silla original) ===== -->
+  <!--
+    La silla del código original, con static-body
+    para que sirva como referencia visual fija en la escena
+  -->
+  <a-gltf-model
+    id="silla-original"
+    src="#modelo-tere"
+    position="0 0 -3"
+    rotation="0 180 0"
+    scale="0.5 0.5 0.5"
+    static-body
+    shadow="cast: true; receive: false">
+  </a-gltf-model>
+
+
+  <!-- ===== MARCADORES DE ORIENTACIÓN EN EL SUELO ===== -->
+  <!-- Ayudan al usuario a orientarse en el sandbox -->
+  <a-text value="NORTE ▲"  position="0 0.05 -8"  rotation="-90 0 0"   color="#3498DB" align="center" width="3"></a-text>
+  <a-text value="SUR ▼"    position="0 0.05  8"   rotation="-90 0 180" color="#E74C3C" align="center" width="3"></a-text>
+  <a-text value="ESTE ▶"   position=" 8 0.05 0"  rotation="-90 0 270" color="#2ECC71" align="center" width="3"></a-text>
+  <a-text value="OESTE ◀"  position="-8 0.05 0"  rotation="-90 0 90"  color="#F39C12" align="center" width="3"></a-text>
+
+</a-scene>
+
+</body>
 </html>
