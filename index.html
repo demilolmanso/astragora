@@ -8,7 +8,7 @@
   <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.0.0/dist/aframe-extras.min.js"></script>
 
   <script>
-    // Componente personalizado para el sistema de salto
+    // 1. Componente personalizado para el sistema de salto
     AFRAME.registerComponent('sistema-salto', {
       schema: {
         fuerzaSalto: { type: 'number', default: 5 },
@@ -18,11 +18,9 @@
         this.velocidadY = 0;
         this.enElSuelo = true;
         
-        // Escuchamos los botones de los mandos de Quest 2 (A en el derecho, X en el izquierdo)
         this.el.sceneEl.addEventListener('abuttondown', () => this.saltar());
         this.el.sceneEl.addEventListener('xbuttondown', () => this.saltar());
         
-        // Soporte adicional para teclado (barra espaciadora) por si pruebas en PC
         window.addEventListener('keydown', (e) => {
           if (e.code === 'Space') this.saltar();
         });
@@ -36,14 +34,12 @@
       tick: function (time, timeDelta) {
         if (this.enElSuelo) return;
 
-        const dt = timeDelta / 1000; // Convertir a segundos
+        const dt = timeDelta / 1000;
         this.velocidadY += this.data.gravedad * dt;
         
-        // Actualizamos la posición Y (altura) del jugador
         const posicion = this.el.getAttribute('position');
         posicion.y += this.velocidadY * dt;
 
-        // Colisión simple con el suelo (suponiendo que el suelo está en y=0)
         if (posicion.y <= 0) {
           posicion.y = 0;
           this.velocidadY = 0;
@@ -53,11 +49,34 @@
         this.el.setAttribute('position', posicion);
       }
     });
+
+    // 2. Componente para gestionar la reproducción automática de la música
+    AFRAME.registerComponent('gestor-musica', {
+      init: function () {
+        const entidadAudio = document.querySelector('#audio-ambiente');
+        
+        // Escucha cuando el usuario entra al modo VR / Pantalla completa
+        this.el.addEventListener('enter-vr', () => {
+          entidadAudio.components.sound.playSound();
+        });
+
+        // Alternativa para PC: si el usuario hace clic en cualquier parte de la pantalla antes de entrar a VR
+        window.addEventListener('click', () => {
+          entidadAudio.components.sound.playSound();
+        }, { once: true }); // El { once: true } asegura que solo salte con el primer clic
+      }
+    });
   </script>
 </head>
 <body>
 
-  <a-scene background="color: #050505">
+  <a-scene background="color: #050505" gestor-musica>
+
+    <a-assets>
+      <audio id="pista-vacio" src="vacio.mp3" preload="auto" crossorigin="anonymous"></audio>
+    </a-assets>
+
+    <a-entity id="audio-ambiente" sound="src: #pista-vacio; loop: true; volume: 0.4"></a-entity>
 
     <a-sky color="#050505"></a-sky>
 
@@ -72,16 +91,10 @@
               position="0 0 0" 
               sistema-salto>
       
-      <a-entity camera 
-                position="0 1.6 0" 
-                look-controls="pointerLockEnabled: false">
-      </a-entity>
+      <a-entity camera position="0 1.6 0" look-controls="pointerLockEnabled: false"></a-entity>
+      <a-entity class="controlador" oculus-touch-controls="hand: left"></a-entity>
+      <a-entity class="controlador" oculus-touch-controls="hand: right"></a-entity>
 
-      <a-entity class="controlador" 
-                oculus-touch-controls="hand: left"></a-entity>
-      
-      <a-entity class="controlador" 
-                oculus-touch-controls="hand: right"></a-entity>
     </a-entity>
 
   </a-scene>
