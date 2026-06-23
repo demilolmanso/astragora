@@ -4,97 +4,64 @@
     <title>Mi Primera Experiencia WebXR</title>
     <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
     <script>
-      // Componente personalizado para mover el Rig con Teclado (PC) y Joystick (Meta Quest)
-AFRAME.registerComponent('movimiento-nativo', {
-  init: function () {
-    this.keys = {};
-    this.velocidad = 0.05; // Ajustamos un poco la velocidad para que sea más suave
-    
-    // Escuchar teclado en PC
-    window.addEventListener('keydown', (e) => { this.keys[e.key.toLowerCase()] = true; });
-    window.addEventListener('keyup', (e) => { this.keys[e.key.toLowerCase()] = false; });
-  },
-  
-  tick: function () {
-    let el = this.el; // El Rig
-    let camara = el.querySelector('[camera]');
-    let rotacionCamara = camara.getAttribute('rotation');
-    
-    // Convertir rotación de la cámara a radianes
-    let angle = rotacionCamara.y * Math.PI / 180;
-    let moveX = 0;
-    let moveZ = 0;
+      // Mantener el componente de movimiento para PC que ya te funcionaba
+      AFRAME.registerComponent('movimiento-nativo', {
+        init: function () {
+          this.keys = {};
+          this.velocidad = 0.08;
+          window.addEventListener('keydown', (e) => { this.keys[e.key.toLowerCase()] = true; });
+          window.addEventListener('keyup', (e) => { this.keys[e.key.toLowerCase()] = false; });
+        },
+        tick: function () {
+          let el = this.el;
+          let camara = el.querySelector('[camera]');
+          let rotacionCamara = camara.getAttribute('rotation');
+          let angle = rotacionCamara.y * Math.PI / 180;
+          let moveX = 0;
+          let moveZ = 0;
 
-    // 1. LÓGICA DE TECLADO (PC)
-    if (this.keys['w'] || this.keys['arrowup']) { moveX -= Math.sin(angle); moveZ -= Math.cos(angle); }
-    if (this.keys['s'] || this.keys['arrowdown']) { moveX += Math.sin(angle); moveZ += Math.cos(angle); }
-    if (this.keys['a'] || this.keys['arrowleft']) { moveX -= Math.cos(angle); moveZ += Math.sin(angle); }
-    if (this.keys['d'] || this.keys['arrowright']) { moveX += Math.cos(angle); moveZ -= Math.sin(angle); }
+          if (this.keys['w'] || this.keys['arrowup']) { moveX -= Math.sin(angle); moveZ -= Math.cos(angle); }
+          if (this.keys['s'] || this.keys['arrowdown']) { moveX += Math.sin(angle); moveZ += Math.cos(angle); }
+          if (this.keys['a'] || this.keys['arrowleft']) { moveX -= Math.cos(angle); moveZ += Math.sin(angle); }
+          if (this.keys['d'] || this.keys['arrowright']) { moveX += Math.cos(angle); moveZ -= Math.sin(angle); }
 
-    // 2. LÓGICA DE JOYSTICK (Meta Quest)
-    // Buscamos la entidad de la mano izquierda dentro del Rig
-    let manoIzquierda = document.querySelector('[oculus-touch-controls="hand: left"]');
-    
-    // Comprobamos si el componente ya detectó el mando físico en VR
-    if (manoIzquierda && manoIzquierda.components['oculus-touch-controls']) {
-      let controller = manoIzquierda.components['oculus-touch-controls'].controller;
-      
-      // Si WebXR ya nos da acceso al backend del control y sus gamepads
-      if (controller && controller.gamepad) {
-        let axes = controller.gamepad.axes; // Array de ejes del joystick
-        
-        // En Quest, axes[0] es Izquierda/Derecha (-1 a 1) y axes[1] es Adelante/Atrás (-1 a 1)
-        let joystickX = axes[0] || 0;
-        let joystickY = axes[1] || 0;
-        
-        // Zona muerta de 0.1 para evitar que se mueva solo si el stick está un poco desgastado
-        if (Math.abs(joystickX) > 0.1 || Math.abs(joystickY) > 0.1) {
-          // Mover hacia adelante/atrás en la dirección que mira la cámara
-          moveX += joystickY * Math.sin(angle);
-          moveZ += joystickY * Math.cos(angle);
-          
-          // Mover hacia los lados (Strafe) relativo a la cámara
-          moveX += joystickX * Math.cos(angle);
-          moveZ -= joystickX * Math.sin(angle);
+          if (moveX !== 0 || moveZ !== 0) {
+            let posicionActual = el.getAttribute('position');
+            let length = Math.sqrt(moveX * moveX + moveZ * moveZ);
+            posicionActual.x += (moveX / length) * this.velocidad;
+            posicionActual.z += (moveZ / length) * this.velocidad;
+            el.setAttribute('position', posicionActual);
+          }
         }
-      }
-    }
-
-    // Aplicar el movimiento final si existe
-    if (moveX !== 0 || moveZ !== 0) {
-      let posicionActual = el.getAttribute('position');
-      let length = Math.sqrt(moveX * moveX + moveZ * moveZ);
-      
-      posicionActual.x += (moveX / length) * this.velocidad;
-      posicionActual.z += (moveZ / length) * this.velocidad;
-      el.setAttribute('position', posicionActual);
-    }
-  }
-});
+      });
     </script>
   </head>
   <body>
     <a-scene>
       
-      <a-box position="-1 0.5 -3" rotation="0 45 0" color="#4CC3D9"></a-box>
-      <a-sphere position="0 1.25 -5" radius="1.25" color="#EF2D5E"></a-sphere>
-      <a-cylinder position="1 0.75 -3" radius="0.5" height="1.5" color="#FFC65D"></a-cylinder>
+      <a-assets>
+        <a-asset-item id="modelo-tere" src="./assetss/tere.glb"></a-asset-item>
+      </a-assets>
+
+      <a-gltf-model 
+        src="#modelo-tere" 
+        position="0 0 -3" 
+        rotation="0 180 0" 
+        scale="1 1 1">
+      </a-gltf-model>
       
       <a-plane position="0 0 0" rotation="-90 0 0" width="20" height="20" color="#7BC8A4"></a-plane>
       <a-sky color="#ECECEC"></a-sky>
 
       <a-entity id="rig" position="0 0 0" movimiento-nativo>
-        
         <a-entity camera position="0 1.6 0" look-controls></a-entity>
-
+        
         <a-entity oculus-touch-controls="hand: left">
           <a-sphere radius="0.05" color="#888888"></a-sphere>
         </a-entity>
-
         <a-entity oculus-touch-controls="hand: right">
           <a-sphere radius="0.05" color="#888888"></a-sphere>
         </a-entity>
-
       </a-entity>
       
     </a-scene>
