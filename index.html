@@ -5,63 +5,72 @@
     <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
     <script>
       // Componente personalizado para mover el Rig con Teclado (PC) y Joystick (Meta Quest)
-      AFRAME.registerComponent('movimiento-nativo', {
-        init: function () {
-          this.keys = {};
-          this.velocidad = 0.08;
-          
-          // Escuchar teclado en PC
-          window.addEventListener('keydown', (e) => { this.keys[e.key.toLowerCase()] = true; });
-          window.addEventListener('keyup', (e) => { this.keys[e.key.toLowerCase()] = false; });
-        },
+AFRAME.registerComponent('movimiento-nativo', {
+  init: function () {
+    this.keys = {};
+    this.velocidad = 0.05; // Ajustamos un poco la velocidad para que sea más suave
+    
+    // Escuchar teclado en PC
+    window.addEventListener('keydown', (e) => { this.keys[e.key.toLowerCase()] = true; });
+    window.addEventListener('keyup', (e) => { this.keys[e.key.toLowerCase()] = false; });
+  },
+  
+  tick: function () {
+    let el = this.el; // El Rig
+    let camara = el.querySelector('[camera]');
+    let rotacionCamara = camara.getAttribute('rotation');
+    
+    // Convertir rotación de la cámara a radianes
+    let angle = rotacionCamara.y * Math.PI / 180;
+    let moveX = 0;
+    let moveZ = 0;
+
+    // 1. LÓGICA DE TECLADO (PC)
+    if (this.keys['w'] || this.keys['arrowup']) { moveX -= Math.sin(angle); moveZ -= Math.cos(angle); }
+    if (this.keys['s'] || this.keys['arrowdown']) { moveX += Math.sin(angle); moveZ += Math.cos(angle); }
+    if (this.keys['a'] || this.keys['arrowleft']) { moveX -= Math.cos(angle); moveZ += Math.sin(angle); }
+    if (this.keys['d'] || this.keys['arrowright']) { moveX += Math.cos(angle); moveZ -= Math.sin(angle); }
+
+    // 2. LÓGICA DE JOYSTICK (Meta Quest)
+    // Buscamos la entidad de la mano izquierda dentro del Rig
+    let manoIzquierda = document.querySelector('[oculus-touch-controls="hand: left"]');
+    
+    // Comprobamos si el componente ya detectó el mando físico en VR
+    if (manoIzquierda && manoIzquierda.components['oculus-touch-controls']) {
+      let controller = manoIzquierda.components['oculus-touch-controls'].controller;
+      
+      // Si WebXR ya nos da acceso al backend del control y sus gamepads
+      if (controller && controller.gamepad) {
+        let axes = controller.gamepad.axes; // Array de ejes del joystick
         
-        tick: function () {
-          let el = this.el; // El Rig
-          let camara = el.querySelector('[camera]');
-          let rotacionCamara = camara.getAttribute('rotation');
+        // En Quest, axes[0] es Izquierda/Derecha (-1 a 1) y axes[1] es Adelante/Atrás (-1 a 1)
+        let joystickX = axes[0] || 0;
+        let joystickY = axes[1] || 0;
+        
+        // Zona muerta de 0.1 para evitar que se mueva solo si el stick está un poco desgastado
+        if (Math.abs(joystickX) > 0.1 || Math.abs(joystickY) > 0.1) {
+          // Mover hacia adelante/atrás en la dirección que mira la cámara
+          moveX += joystickY * Math.sin(angle);
+          moveZ += joystickY * Math.cos(angle);
           
-          // Convertir rotación de la cámara a radianes para movernos en la dirección que miramos
-          let angle = rotacionCamara.y * Math.PI / 180;
-          let moveX = 0;
-          let moveZ = 0;
-
-          // 1. LÓGICA DE TECLADO (PC)
-          if (this.keys['w'] || this.keys['arrowup']) { moveX -= Math.sin(angle); moveZ -= Math.cos(angle); }
-          if (this.keys['s'] || this.keys['arrowdown']) { moveX += Math.sin(angle); moveZ += Math.cos(angle); }
-          if (this.keys['a'] || this.keys['arrowleft']) { moveX -= Math.cos(angle); moveZ += Math.sin(angle); }
-          if (this.keys['dist'] || this.keys['d'] || this.keys['arrowright']) { moveX += Math.cos(angle); moveZ -= Math.sin(angle); }
-
-          // 2. LÓGICA DE JOYSTICK (Meta Quest - Gamepad API)
-          let gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
-          for (let i = 0; i < gamepads.length; i++) {
-            let gp = gamepads[i];
-            // Buscamos el mando izquierdo (suele tener el id u orden específico)
-            if (gp && gp.hand === 'left' && gp.axes) {
-              let joystickX = gp.axes[2] || gp.axes[0]; // Eje X del stick
-              let joystickY = gp.axes[3] || gp.axes[1]; // Eje Y del stick
-              
-              if (Math.abs(joystickX) > 0.1 || Math.abs(joystickY) > 0.1) {
-                // Adelante/Atrás
-                moveX += joystickY * Math.sin(angle);
-                moveZ += joystickY * Math.cos(angle);
-                // Izquierda/Derecha
-                moveX += joystickX * Math.cos(angle);
-                moveZ -= joystickX * Math.sin(angle);
-              }
-            }
-          }
-
-          // Aplicar el movimiento si hay alguna pulsación o acción del joystick
-          if (moveX !== 0 || moveZ !== 0) {
-            let posicionActual = el.getAttribute('position');
-            // Normalizamos el vector para que no camine más rápido en diagonal
-            let length = Math.sqrt(moveX * moveX + moveZ * moveZ);
-            posicionActual.x += (moveX / length) * this.velocidad;
-            posicionActual.z += (moveZ / length) * this.velocidad;
-            el.setAttribute('position', posicionActual);
-          }
+          // Mover hacia los lados (Strafe) relativo a la cámara
+          moveX += joystickX * Math.cos(angle);
+          moveZ -= joystickX * Math.sin(angle);
         }
-      });
+      }
+    }
+
+    // Aplicar el movimiento final si existe
+    if (moveX !== 0 || moveZ !== 0) {
+      let posicionActual = el.getAttribute('position');
+      let length = Math.sqrt(moveX * moveX + moveZ * moveZ);
+      
+      posicionActual.x += (moveX / length) * this.velocidad;
+      posicionActual.z += (moveZ / length) * this.velocidad;
+      el.setAttribute('position', posicionActual);
+    }
+  }
+});
     </script>
   </head>
   <body>
