@@ -86,6 +86,32 @@
     <a-plane position="0 -0.01 0" rotation="-90 0 0" width="1000" height="1000" 
              material="color: #050505"></a-plane>
 
+    <a-entity id="supernova" position="0 60 -150">
+      
+      <a-sphere radius="4" 
+                material="color: #ffffff; shader: flat"
+                animation="property: scale; to: 1.05 1.05 1.05; dir: alternate; dur: 800; loop: true; easing: easeInOutSine">
+      </a-sphere>
+
+      <a-sphere radius="4.5" 
+                material="color: #00e5ff; shader: flat; transparent: true; opacity: 0.7; blending: additive"
+                animation="property: scale; to: 1.4 1.4 1.4; dir: alternate; dur: 2000; loop: true; easing: easeInOutSine">
+      </a-sphere>
+
+      <a-sphere radius="5" 
+                material="color: #aa00ff; shader: flat; transparent: true; opacity: 0.3; blending: additive"
+                animation="property: scale; to: 2.5 2.5 2.5; dir: alternate; dur: 4500; loop: true; easing: easeInOutSine">
+      </a-sphere>
+
+      <a-light type="point" 
+               color="#00e5ff" 
+               intensity="2" 
+               distance="300"
+               animation="property: intensity; to: 3.5; dir: alternate; dur: 2000; loop: true; easing: easeInOutSine">
+      </a-light>
+
+    </a-entity>
+
     <a-entity id="jugador" 
               movement-controls="speed: 0.15" 
               position="0 0 0" 
