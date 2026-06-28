@@ -2,73 +2,183 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>El Vacío - WebXR Quest 2</title>
+  <title>El Vacío - WebXR Quest 2 (Director Mode)</title>
   
   <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
   <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.0.0/dist/aframe-extras.min.js"></script>
+  
+  <script src="https://unpkg.com/peerjs@1.5.1/dist/peerjs.min.js"></script>
+
+  <style>
+    /* Estilos para el menú de conexión superpuesto */
+    #menu-conexion {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: #050505; color: #00e5ff; font-family: sans-serif;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      z-index: 9999; text-align: center;
+    }
+    button {
+      background: #aa00ff; color: white; border: none; padding: 15px 30px;
+      font-size: 18px; margin: 10px; border-radius: 8px; cursor: pointer;
+      font-weight: bold; text-transform: uppercase;
+    }
+    button:hover { background: #00e5ff; color: black; }
+    input {
+      padding: 10px; font-size: 18px; text-align: center; margin-bottom: 15px;
+      border: 2px solid #00e5ff; background: #222; color: white;
+    }
+    #estado { margin-top: 20px; font-size: 20px; color: #fff; }
+  </style>
 
   <script>
-    // 1. Componente personalizado para el sistema de salto
-    AFRAME.registerComponent('sistema-salto', {
-      schema: {
-        fuerzaSalto: { type: 'number', default: 5 },
-        gravedad: { type: 'number', default: -9.8 }
-      },
+    // Variables globales para la conexión
+    let peer, conexion;
+
+    // 1. Componente personalizado para recibir el giroscopio y mover la cámara
+    AFRAME.registerComponent('receptor-giroscopio', {
       init: function () {
-        this.velocidadY = 0;
-        this.enElSuelo = true;
+        this.euler = new THREE.Euler();
         
+        window.addEventListener('giroscopio-recibido', (e) => {
+          let datos = e.detail;
+          // Mapeo de ángulos del celular al espacio 3D de A-Frame
+          // Asume que sostienes el celular en modo apaisado (Landscape)
+          this.euler.set(
+            THREE.MathUtils.degToRad(datos.beta),   // Inclinación arriba/abajo
+            THREE.MathUtils.degToRad(datos.alpha),  // Rotación izquierda/derecha
+            THREE.MathUtils.degToRad(-datos.gamma), // Inclinación lateral
+            'YXZ'
+          );
+          this.el.object3D.quaternion.setFromEuler(this.euler);
+        });
+      }
+    });
+
+    // COMPONENTES ORIGINALES DEL JUEGO
+    AFRAME.registerComponent('sistema-salto', {
+      schema: { fuerzaSalto: { type: 'number', default: 5 }, gravedad: { type: 'number', default: -9.8 } },
+      init: function () {
+        this.velocidadY = 0; this.enElSuelo = true;
         this.el.sceneEl.addEventListener('abuttondown', () => this.saltar());
         this.el.sceneEl.addEventListener('xbuttondown', () => this.saltar());
-        
-        window.addEventListener('keydown', (e) => {
-          if (e.code === 'Space') this.saltar();
-        });
+        window.addEventListener('keydown', (e) => { if (e.code === 'Space') this.saltar(); });
       },
       saltar: function () {
-        if (this.enElSuelo) {
-          this.velocidadY = this.data.fuerzaSalto;
-          this.enElSuelo = false;
-        }
+        if (this.enElSuelo) { this.velocidadY = this.data.fuerzaSalto; this.enElSuelo = false; }
       },
       tick: function (time, timeDelta) {
         if (this.enElSuelo) return;
-
         const dt = timeDelta / 1000;
         this.velocidadY += this.data.gravedad * dt;
-        
         const posicion = this.el.getAttribute('position');
         posicion.y += this.velocidadY * dt;
-
-        if (posicion.y <= 0) {
-          posicion.y = 0;
-          this.velocidadY = 0;
-          this.enElSuelo = true;
-        }
-        
+        if (posicion.y <= 0) { posicion.y = 0; this.velocidadY = 0; this.enElSuelo = true; }
         this.el.setAttribute('position', posicion);
       }
     });
 
-    // 2. Componente para gestionar la reproducción automática de la música
     AFRAME.registerComponent('gestor-musica', {
       init: function () {
         const entidadAudio = document.querySelector('#audio-ambiente');
-        
-        // Escucha cuando el usuario entra al modo VR / Pantalla completa
-        this.el.addEventListener('enter-vr', () => {
-          entidadAudio.components.sound.playSound();
-        });
-
-        // Alternativa para PC: si el usuario hace clic en cualquier parte de la pantalla antes de entrar a VR
-        window.addEventListener('click', () => {
-          entidadAudio.components.sound.playSound();
-        }, { once: true }); // El { once: true } asegura que solo salte con el primer clic
+        this.el.addEventListener('enter-vr', () => { entidadAudio.components.sound.playSound(); });
+        window.addEventListener('click', () => { entidadAudio.components.sound.playSound(); }, { once: true });
       }
     });
+
+    // LÓGICA DE CONEXIÓN (PEERJS)
+    function iniciarComoEscena() {
+      // Ocultar menú
+      document.getElementById('opciones-inicio').style.display = 'none';
+      document.getElementById('estado').innerText = "Generando ID de sala...";
+      
+      // Crear peer para recibir datos
+      let idSala = 'vacio-' + Math.floor(Math.random() * 10000);
+      peer = new Peer(idSala);
+
+      peer.on('open', function(id) {
+        document.getElementById('estado').innerHTML = `
+          ID de esta sala: <strong style="color:#aa00ff; font-size:24px;">${id}</strong><br>
+          Entra con tu celular e ingresa este código.
+        `;
+      });
+
+      peer.on('connection', function(conn) {
+        conexion = conn;
+        document.getElementById('menu-conexion').style.display = 'none'; // Quitar menú al conectar
+        
+        conexion.on('data', function(datos) {
+          // Disparar evento para que A-Frame lo escuche
+          window.dispatchEvent(new CustomEvent('giroscopio-recibido', { detail: datos }));
+        });
+      });
+    }
+
+    function iniciarComoCelular() {
+      document.getElementById('opciones-inicio').style.display = 'none';
+      document.getElementById('ui-celular').style.display = 'block';
+    }
+
+    function conectarCelular() {
+      let idSala = document.getElementById('input-sala').value;
+      document.getElementById('estado').innerText = "Conectando...";
+      
+      peer = new Peer();
+      peer.on('open', function() {
+        conexion = peer.connect(idSala);
+        
+        conexion.on('open', function() {
+          document.getElementById('estado').innerText = "¡Conectado! Enviando movimiento...";
+          solicitarGiroscopio();
+        });
+      });
+    }
+
+    function solicitarGiroscopio() {
+      // iOS 13+ requiere pedir permiso mediante un botón
+      if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+        DeviceOrientationEvent.requestPermission()
+          .then(permissionState => {
+            if (permissionState === 'granted') { activarSensores(); } 
+            else { alert("Permiso denegado"); }
+          }).catch(console.error);
+      } else {
+        activarSensores(); // Android o navegadores antiguos
+      }
+    }
+
+    function activarSensores() {
+      window.addEventListener('deviceorientation', function(event) {
+        if (conexion && conexion.open) {
+          conexion.send({
+            alpha: event.alpha, // Eje Z
+            beta: event.beta,   // Eje X
+            gamma: event.gamma  // Eje Y
+          });
+        }
+      });
+    }
   </script>
 </head>
 <body>
+
+  <div id="menu-conexion">
+    <h1>El Vacío - Modo Director</h1>
+    
+    <div id="opciones-inicio">
+      <p>¿Qué dispositivo es este?</p>
+      <button onclick="iniciarComoEscena()">Mundo Virtual (Quest/PC)</button>
+      <button onclick="iniciarComoCelular()">Cámara (Celular)</button>
+    </div>
+
+    <div id="ui-celular" style="display: none;">
+      <p>Ingresa el ID de la sala que aparece en la PC/Quest:</p>
+      <input type="text" id="input-sala" placeholder="vacio-XXXX">
+      <br>
+      <button onclick="conectarCelular()">Conectar y Transmitir</button>
+    </div>
+
+    <div id="estado"></div>
+  </div>
 
   <a-scene background="color: #050505" gestor-musica>
 
@@ -77,51 +187,28 @@
     </a-assets>
 
     <a-entity id="audio-ambiente" sound="src: #pista-vacio; loop: true; volume: 0.4"></a-entity>
-
     <a-sky color="#050505"></a-sky>
 
     <a-plane position="0 0 0" rotation="-90 0 0" width="1000" height="1000" 
              segments-width="250" segments-height="250" 
              material="color: #222222; wireframe: true"></a-plane>
-    <a-plane position="0 -0.01 0" rotation="-90 0 0" width="1000" height="1000" 
-             material="color: #050505"></a-plane>
+    <a-plane position="0 -0.01 0" rotation="-90 0 0" width="1000" height="1000" material="color: #050505"></a-plane>
 
     <a-entity id="supernova" position="0 60 -150">
-      
-      <a-sphere radius="4" 
-                material="color: #ffffff; shader: flat"
-                animation="property: scale; to: 1.05 1.05 1.05; dir: alternate; dur: 800; loop: true; easing: easeInOutSine">
-      </a-sphere>
-
-      <a-sphere radius="4.5" 
-                material="color: #00e5ff; shader: flat; transparent: true; opacity: 0.7; blending: additive"
-                animation="property: scale; to: 1.4 1.4 1.4; dir: alternate; dur: 2000; loop: true; easing: easeInOutSine">
-      </a-sphere>
-
-      <a-sphere radius="5" 
-                material="color: #aa00ff; shader: flat; transparent: true; opacity: 0.3; blending: additive"
-                animation="property: scale; to: 2.5 2.5 2.5; dir: alternate; dur: 4500; loop: true; easing: easeInOutSine">
-      </a-sphere>
-
-      <a-light type="point" 
-               color="#00e5ff" 
-               intensity="2" 
-               distance="300"
-               animation="property: intensity; to: 3.5; dir: alternate; dur: 2000; loop: true; easing: easeInOutSine">
-      </a-light>
-
+      <a-sphere radius="4" material="color: #ffffff; shader: flat" animation="property: scale; to: 1.05 1.05 1.05; dir: alternate; dur: 800; loop: true; easing: easeInOutSine"></a-sphere>
+      <a-sphere radius="4.5" material="color: #00e5ff; shader: flat; transparent: true; opacity: 0.7; blending: additive" animation="property: scale; to: 1.4 1.4 1.4; dir: alternate; dur: 2000; loop: true; easing: easeInOutSine"></a-sphere>
+      <a-sphere radius="5" material="color: #aa00ff; shader: flat; transparent: true; opacity: 0.3; blending: additive" animation="property: scale; to: 2.5 2.5 2.5; dir: alternate; dur: 4500; loop: true; easing: easeInOutSine"></a-sphere>
+      <a-light type="point" color="#00e5ff" intensity="2" distance="300" animation="property: intensity; to: 3.5; dir: alternate; dur: 2000; loop: true; easing: easeInOutSine"></a-light>
     </a-entity>
 
-    <a-entity id="jugador" 
-              movement-controls="speed: 0.15" 
-              position="0 0 0" 
-              sistema-salto>
-      
+    <a-entity id="jugador" movement-controls="speed: 0.15" position="0 0 0" sistema-salto>
       <a-entity camera position="0 1.6 0" look-controls="pointerLockEnabled: false"></a-entity>
       <a-entity class="controlador" oculus-touch-controls="hand: left"></a-entity>
       <a-entity class="controlador" oculus-touch-controls="hand: right"></a-entity>
-
     </a-entity>
+
+    <a-entity id="camara-virtual" position="0 1.6 3" receptor-giroscopio>
+      <a-box color="red" depth="0.2" height="0.1" width="0.1" visible="false"></a-box> </a-entity>
 
   </a-scene>
 
