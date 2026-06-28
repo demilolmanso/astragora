@@ -6,11 +6,9 @@
   
   <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
   <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.0.0/dist/aframe-extras.min.js"></script>
-  
   <script src="https://unpkg.com/peerjs@1.5.1/dist/peerjs.min.js"></script>
 
   <style>
-    /* Estilos para el menú de conexión superpuesto */
     #menu-conexion {
       position: fixed; top: 0; left: 0; width: 100%; height: 100%;
       background: #050505; color: #00e5ff; font-family: sans-serif;
@@ -31,22 +29,19 @@
   </style>
 
   <script>
-    // Variables globales para la conexión
     let peer, conexion;
 
-    // 1. Componente personalizado para recibir el giroscopio y mover la cámara
+    // Componente para recibir el giroscopio y mover la cámara
     AFRAME.registerComponent('receptor-giroscopio', {
       init: function () {
         this.euler = new THREE.Euler();
         
         window.addEventListener('giroscopio-recibido', (e) => {
           let datos = e.detail;
-          // Mapeo de ángulos del celular al espacio 3D de A-Frame
-          // Asume que sostienes el celular en modo apaisado (Landscape)
           this.euler.set(
-            THREE.MathUtils.degToRad(datos.beta),   // Inclinación arriba/abajo
-            THREE.MathUtils.degToRad(datos.alpha),  // Rotación izquierda/derecha
-            THREE.MathUtils.degToRad(-datos.gamma), // Inclinación lateral
+            THREE.MathUtils.degToRad(datos.beta),   
+            THREE.MathUtils.degToRad(datos.alpha),  
+            THREE.MathUtils.degToRad(-datos.gamma), 
             'YXZ'
           );
           this.el.object3D.quaternion.setFromEuler(this.euler);
@@ -54,7 +49,7 @@
       }
     });
 
-    // COMPONENTES ORIGINALES DEL JUEGO
+    // Componentes del juego
     AFRAME.registerComponent('sistema-salto', {
       schema: { fuerzaSalto: { type: 'number', default: 5 }, gravedad: { type: 'number', default: -9.8 } },
       init: function () {
@@ -80,18 +75,21 @@
     AFRAME.registerComponent('gestor-musica', {
       init: function () {
         const entidadAudio = document.querySelector('#audio-ambiente');
-        this.el.addEventListener('enter-vr', () => { entidadAudio.components.sound.playSound(); });
-        window.addEventListener('click', () => { entidadAudio.components.sound.playSound(); }, { once: true });
+        this.el.addEventListener('enter-vr', () => { 
+            if(entidadAudio.components.sound) entidadAudio.components.sound.playSound(); 
+        });
+        window.addEventListener('click', () => { 
+            if(entidadAudio.components.sound) entidadAudio.components.sound.playSound(); 
+        }, { once: true });
       }
     });
 
-    // LÓGICA DE CONEXIÓN (PEERJS)
+    // --- LÓGICA DE CONEXIÓN CORREGIDA ---
+
     function iniciarComoEscena() {
-      // Ocultar menú
       document.getElementById('opciones-inicio').style.display = 'none';
       document.getElementById('estado').innerText = "Generando ID de sala...";
       
-      // Crear peer para recibir datos
       let idSala = 'vacio-' + Math.floor(Math.random() * 10000);
       peer = new Peer(idSala);
 
@@ -104,55 +102,83 @@
 
       peer.on('connection', function(conn) {
         conexion = conn;
-        document.getElementById('menu-conexion').style.display = 'none'; // Quitar menú al conectar
+        document.getElementById('menu-conexion').style.display = 'none'; 
         
         conexion.on('data', function(datos) {
-          // Disparar evento para que A-Frame lo escuche
           window.dispatchEvent(new CustomEvent('giroscopio-recibido', { detail: datos }));
         });
+      });
+      
+      peer.on('error', function(err) {
+          document.getElementById('estado').innerText = "Error: " + err.type;
       });
     }
 
     function iniciarComoCelular() {
       document.getElementById('opciones-inicio').style.display = 'none';
       document.getElementById('ui-celular').style.display = 'block';
+      
+      // FIX: Destruimos la escena 3D en el celular para que no consuma recursos ni robe el giroscopio
+      let escena = document.querySelector('a-scene');
+      if (escena) {
+          escena.parentNode.removeChild(escena);
+      }
     }
 
     function conectarCelular() {
-      let idSala = document.getElementById('input-sala').value;
-      document.getElementById('estado').innerText = "Conectando...";
+      let idSala = document.getElementById('input-sala').value.trim();
+      if (!idSala) return alert("Por favor, ingresá el ID de la sala.");
       
-      peer = new Peer();
-      peer.on('open', function() {
-        conexion = peer.connect(idSala);
-        
-        conexion.on('open', function() {
-          document.getElementById('estado').innerText = "¡Conectado! Enviando movimiento...";
-          solicitarGiroscopio();
-        });
-      });
-    }
+      document.getElementById('estado').innerText = "Solicitando permisos de sensor...";
 
-    function solicitarGiroscopio() {
-      // iOS 13+ requiere pedir permiso mediante un botón
-      if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+      // FIX: Pedir permisos de forma SÍNCRONA con el clic del botón
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
         DeviceOrientationEvent.requestPermission()
           .then(permissionState => {
-            if (permissionState === 'granted') { activarSensores(); } 
-            else { alert("Permiso denegado"); }
-          }).catch(console.error);
+            if (permissionState === 'granted') {
+              iniciarPeerJS(idSala);
+            } else {
+              document.getElementById('estado').innerText = "Permiso denegado por el usuario.";
+            }
+          }).catch(err => {
+              document.getElementById('estado').innerText = "Error al pedir permisos.";
+              console.error(err);
+          });
       } else {
-        activarSensores(); // Android o navegadores antiguos
+        // Navegadores que no requieren permiso explícito (Android, PCs, etc)
+        iniciarPeerJS(idSala);
       }
+    }
+
+    function iniciarPeerJS(idSala) {
+        document.getElementById('estado').innerText = "Conectando al mundo virtual...";
+        
+        peer = new Peer();
+        peer.on('open', function() {
+            conexion = peer.connect(idSala);
+            
+            conexion.on('open', function() {
+                document.getElementById('estado').innerText = "¡Conectado! Mové el celular.";
+                activarSensores();
+            });
+
+            conexion.on('error', function() {
+                document.getElementById('estado').innerText = "Error en la conexión.";
+            });
+        });
+
+        peer.on('error', function(err) {
+            document.getElementById('estado').innerText = "Error de red: " + err.type;
+        });
     }
 
     function activarSensores() {
       window.addEventListener('deviceorientation', function(event) {
         if (conexion && conexion.open) {
           conexion.send({
-            alpha: event.alpha, // Eje Z
-            beta: event.beta,   // Eje X
-            gamma: event.gamma  // Eje Y
+            alpha: event.alpha, 
+            beta: event.beta,   
+            gamma: event.gamma  
           });
         }
       });
@@ -171,7 +197,7 @@
     </div>
 
     <div id="ui-celular" style="display: none;">
-      <p>Ingresa el ID de la sala que aparece en la PC/Quest:</p>
+      <p>Ingresá el ID de la sala:</p>
       <input type="text" id="input-sala" placeholder="vacio-XXXX">
       <br>
       <button onclick="conectarCelular()">Conectar y Transmitir</button>
@@ -208,7 +234,8 @@
     </a-entity>
 
     <a-entity id="camara-virtual" position="0 1.6 3" receptor-giroscopio>
-      <a-box color="red" depth="0.2" height="0.1" width="0.1" visible="false"></a-box> </a-entity>
+      <a-box color="red" depth="0.2" height="0.1" width="0.1"></a-box> 
+    </a-entity>
 
   </a-scene>
 
